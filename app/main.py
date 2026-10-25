@@ -32,9 +32,13 @@ _thumb_cache: dict[tuple[str, float], bytes] = {}
 _view_cache: dict[tuple[str, float], bytes] = {}
 
 
+def name_key(name: str):
+    """파일 이름 자연 정렬: img2 < img10 (숫자는 숫자로, 글자는 대소문자 무시)."""
+    return [(0, int(t), "") if t.isdigit() else (1, 0, t.lower()) for t in re.split(r"(\d+)", name) if t]
+
+
 def sort_key(path: Path):
-    m = re.search(r"(\d+)", path.name)
-    return int(m.group(1)) if m else path.name
+    return name_key(path.name)
 
 
 def _load_order() -> list[str]:
@@ -155,6 +159,8 @@ async def upload(files: list[UploadFile] = File(...), insert_at: int = Form(-1))
         saved.append(name)
 
     if saved:
+        # 한 번에 올린 파일들은 파일 이름순으로
+        saved = sorted(dict.fromkeys(saved), key=name_key)
         order = [p.name for p in ordered_files()]
         if insert_at >= 0:
             # 끌어놓은 위치에 끼워 넣기 (같은 이름이 있으면 그 자리로 옮김)
@@ -252,6 +258,14 @@ async def reorder(order: list[str]):
             clean.append(n)
     _save_order(clean)
     return JSONResponse({"ok": True, "order": clean})
+
+
+@app.post("/sort-by-name")
+async def sort_by_name():
+    """전체 페이지를 파일 이름순으로 다시 정렬."""
+    names = sorted((p.name for p in _image_files()), key=name_key)
+    _save_order(names)
+    return JSONResponse({"ok": True, "order": names})
 
 
 @app.delete("/files/{name}")

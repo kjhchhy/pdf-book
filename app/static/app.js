@@ -566,6 +566,16 @@ async function refresh() {
   render();
 }
 
+/* ───────── 전체를 파일 이름순으로 ───────── */
+
+$("#sortNameBtn").addEventListener("click", async () => {
+  if (!state.names.length) return;
+  if (!confirm("지금 순서를 버리고 파일 이름순으로 다시 정렬할까요?")) return;
+  await api("/sort-by-name", { method: "POST" });
+  toast("파일 이름순으로 정렬했습니다.", "is-good");
+  refresh();
+});
+
 /* ───────── 전체 삭제 ───────── */
 
 $("#clearBtn").addEventListener("click", async () => {
