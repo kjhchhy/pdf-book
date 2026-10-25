@@ -3,18 +3,22 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
-import shutil, secrets, re, os, base64, io, json
+import shutil, secrets, re, os, base64, io, json, tempfile
 
 from PIL import Image, ImageFilter
 from weasyprint import HTML, CSS
 
 app = FastAPI()
 
-BASE = Path("/opt/pdf-book")
+# 서버는 /opt/pdf-book, 로컬 테스트는 PDFBOOK_BASE 로 덮어쓴다
+BASE = Path(os.getenv("PDFBOOK_BASE", "/opt/pdf-book"))
 UPLOAD_DIR = BASE / "uploads"
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ORDER_FILE = UPLOAD_DIR / "_order.json"
+CROP_FILE = UPLOAD_DIR / "_crop.json"   # {파일명: {l,t,r,b}} 픽셀 자르기
+
+DPI = 200   # 이미지 픽셀 → mm 환산 기준
 
 app.mount("/static", StaticFiles(directory=str(BASE / "app/static")), name="static")
 templates = Jinja2Templates(directory=str(BASE / "app/templates"))
@@ -45,6 +49,37 @@ def _load_order() -> list[str]:
 
 def _save_order(names: list[str]) -> None:
     ORDER_FILE.write_text(json.dumps(names, ensure_ascii=False), "utf-8")
+
+
+def _load_crops() -> dict:
+    try:
+        data = json.loads(CROP_FILE.read_text("utf-8"))
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_crops(crops: dict) -> None:
+    CROP_FILE.write_text(json.dumps(crops, ensure_ascii=False), "utf-8")
+
+
+def crop_box(p: Path, crop: dict | None, whitespace: bool) -> tuple[int, int, tuple[int, int, int, int]]:
+    """원본 크기와, PDF에 실제로 쓰일 영역 (x0, y0, x1, y1) — 픽셀 자르기 후 흰 여백 자르기."""
+    im = Image.open(p)
+    ow, oh = im.size
+    c = crop or {}
+    x0 = min(max(0, int(c.get("l", 0))), ow - 1)
+    y0 = min(max(0, int(c.get("t", 0))), oh - 1)
+    x1 = max(x0 + 1, ow - max(0, int(c.get("r", 0))))
+    y1 = max(y0 + 1, oh - max(0, int(c.get("b", 0))))
+    if whitespace:
+        part = im.crop((x0, y0, x1, y1)).convert("L").filter(ImageFilter.GaussianBlur(radius=1))
+        bbox = part.point(lambda x: 0 if x >= 245 else 255, mode="1").getbbox()
+        if bbox:
+            x0, y0, x1, y1 = x0 + bbox[0], y0 + bbox[1], x0 + bbox[2], y0 + bbox[3]
+    return ow, oh, (x0, y0, x1, y1)
 
 
 def _image_files() -> list[Path]:
@@ -106,7 +141,7 @@ async def login(request: Request):
 
 
 @app.post("/upload")
-async def upload(files: list[UploadFile] = File(...)):
+async def upload(files: list[UploadFile] = File(...), insert_at: int = Form(-1)):
     saved = []
     for f in files:
         name = Path(f.filename or "").name
@@ -120,11 +155,16 @@ async def upload(files: list[UploadFile] = File(...)):
         saved.append(name)
 
     if saved:
-        order = _load_order()
-        known = set(order)
-        for n in saved:
-            if n not in known:
-                order.append(n)
+        order = [p.name for p in ordered_files()]
+        if insert_at >= 0:
+            # 끌어놓은 위치에 끼워 넣기 (같은 이름이 있으면 그 자리로 옮김)
+            pos = min(insert_at, len(order))
+            pos -= sum(1 for n in order[:pos] if n in saved)
+            order = [n for n in order if n not in saved]
+            order[pos:pos] = saved
+        else:
+            known = set(order)
+            order += [n for n in saved if n not in known]
         _save_order(order)
 
     return JSONResponse({"files": saved})
@@ -220,6 +260,9 @@ async def delete_file(name: str):
     if p.exists() and p.suffix.lower() in IMAGE_EXT:
         p.unlink()
     _save_order([n for n in _load_order() if n != p.name])
+    crops = _load_crops()
+    if crops.pop(p.name, None) is not None:
+        _save_crops(crops)
     return JSONResponse({"ok": True})
 
 
@@ -228,9 +271,101 @@ async def clear_files():
     for p in _image_files():
         p.unlink()
     _save_order([])
+    _save_crops({})
     _thumb_cache.clear()
     _view_cache.clear()
     return JSONResponse({"ok": True})
+
+
+@app.get("/crop/{name}")
+async def get_crop(name: str):
+    return JSONResponse(_load_crops().get(Path(name).name, {"l": 0, "t": 0, "r": 0, "b": 0}))
+
+
+@app.post("/crop/{name}")
+async def set_crop(name: str, request: Request):
+    """페이지별 상하좌우 픽셀 자르기 저장 (원본 이미지 기준)."""
+    name = Path(name).name
+    data = await request.json()
+    c = {k: max(0, int(data.get(k) or 0)) for k in ("l", "t", "r", "b")}
+    crops = _load_crops()
+    if any(c.values()):
+        crops[name] = c
+    else:
+        crops.pop(name, None)
+    _save_crops(crops)
+    return JSONResponse({"ok": True, "crop": c})
+
+
+class Settings:
+    """PDF 설정 — /build 와 /layout 이 같은 값을 같은 방식으로 해석한다."""
+
+    PAGE_SIZES = {"A4": (210, 297), "A5": (148, 210), "Letter": (216, 279), "Legal": (216, 356)}
+
+    def __init__(self, page_size="A4", custom_w=0.0, custom_h=0.0, custom_auto="true",
+                 first_page_as_base="true", fit="contain", crop_whitespace="false"):
+        self.page_size = page_size
+        self.custom_w = float(custom_w or 0)
+        self.custom_h = float(custom_h or 0)
+        self.custom_auto = custom_auto == "true"
+        self.first_page_as_base = first_page_as_base == "true"
+        self.fit = fit
+        self.crop_whitespace = crop_whitespace == "true"
+
+
+def page_mm(files: list[Path], s: Settings, crops: dict) -> tuple[float, float]:
+    """PDF 페이지 크기(mm). 비율 기준은 첫 이미지(자르기 반영)."""
+    def first_size():
+        _, _, box = crop_box(files[0], crops.get(files[0].name), s.crop_whitespace)
+        return box[2] - box[0], box[3] - box[1]
+
+    base_w, base_h = Settings.PAGE_SIZES.get(s.page_size, (210, 297))
+    if s.page_size == "CUSTOM":
+        base_w, base_h = s.custom_w, s.custom_h
+        if s.custom_auto or base_h <= 0:
+            try:
+                fw, fh = first_size()
+                base_h = round(s.custom_w * fh / fw, 1)
+            except Exception:
+                base_h = s.custom_h or 297
+    elif s.first_page_as_base and files:
+        try:
+            fw, fh = first_size()
+            base_w, base_h = fw * 25.4 / DPI, fh * 25.4 / DPI
+        except Exception:
+            pass
+    return base_w, base_h
+
+
+def image_mm(box_w: int, box_h: int, page_w: float, page_h: float, fit: str) -> tuple[float, float]:
+    """페이지 안에 놓일 이미지 크기(mm). 비율 유지 = 원래 크기(200dpi)로, 넘치면 줄임 / 꽉 채우기 = 덮고 넘치는 부분은 잘림."""
+    iw, ih = box_w * 25.4 / DPI, box_h * 25.4 / DPI
+    if fit == "cover":
+        s = max(page_w / iw, page_h / ih)
+    else:
+        s = min(1.0, page_w / iw, page_h / ih)
+    return iw * s, ih * s
+
+
+@app.get("/layout/{name}")
+async def layout(name: str, page_size: str = "A4", custom_w: float = 0.0, custom_h: float = 0.0,
+                 custom_auto: str = "true", first_page_as_base: str = "true",
+                 fit: str = "contain", crop_whitespace: str = "false"):
+    """미리보기용: 이 페이지가 PDF에서 어떻게 놓이는지 (mm, 원본 픽셀 기준 자르기 영역)."""
+    files = ordered_files()
+    p = UPLOAD_DIR / Path(name).name
+    if p not in files:
+        raise HTTPException(404, "not found")
+    s = Settings(page_size, custom_w, custom_h, custom_auto, first_page_as_base, fit, crop_whitespace)
+    crops = _load_crops()
+    pw, ph = page_mm(files, s, crops)
+    ow, oh, box = crop_box(p, crops.get(p.name), s.crop_whitespace)
+    iw, ih = image_mm(box[2] - box[0], box[3] - box[1], pw, ph, s.fit)
+    return JSONResponse({
+        "page_w": pw, "page_h": ph, "img_w": iw, "img_h": ih,
+        "orig_w": ow, "orig_h": oh, "box": list(box),
+        "crop": crops.get(p.name, {"l": 0, "t": 0, "r": 0, "b": 0}),
+    })
 
 
 @app.post("/build")
@@ -251,90 +386,55 @@ async def build_pdf(
     if page_size == "CUSTOM" and custom_w <= 0:
         raise HTTPException(400, "페이지 가로 크기를 mm 단위로 입력해주세요.")
 
-    page_sizes = {
-        "A4": (210, 297),
-        "A5": (148, 210),
-        "Letter": (216, 279),
-        "Legal": (216, 356),
-    }
-    base_w, base_h = page_sizes.get(page_size, (210, 297))
-    if page_size == "CUSTOM":
-        base_w = custom_w
-        base_h = custom_h
-        if custom_auto == "true" or base_h <= 0:
-            # 비율은 첫 페이지(첫 이미지)를 기준으로: 세로 = 가로 × (첫 이미지 세로/가로)
-            try:
-                first_img = crop_whitespace_impl(files[0]) if crop_whitespace == "true" else Image.open(files[0])
-                fw, fh = first_img.size
-                base_h = round(custom_w * fh / fw, 1)
-            except Exception:
-                base_h = custom_h or 297
-    elif first_page_as_base == "true" and files:
-        try:
-            first_img = crop_whitespace_impl(files[0]) if crop_whitespace == "true" else Image.open(files[0])
-            if first_img.mode != "RGB":
-                first_img = first_img.convert("RGB")
-            w, h = first_img.size
-            base_w, base_h = w * 25.4 / 200, h * 25.4 / 200
-        except Exception:
-            pass
+    s = Settings(page_size, custom_w, custom_h, custom_auto, first_page_as_base, fit, crop_whitespace)
+    crops = _load_crops()
+    base_w, base_h = page_mm(files, s, crops)
 
-    def page_for(p: Path):
-        if crop_whitespace == "true":
-            im = crop_whitespace_impl(p)
-        else:
-            im = Image.open(p)
-        if im.mode != "RGB":
-            im = im.convert("RGB")
-        w, h = im.size
-        img_mm_w = w * 25.4 / 200
-        img_mm_h = h * 25.4 / 200
-        if fit == "contain":
-            return img_mm_w, img_mm_h
-        scale = max(base_w / img_mm_w, base_h / img_mm_h)
-        return img_mm_w * scale, img_mm_h * scale
+    with tempfile.TemporaryDirectory() as tmp:
+        pages_html = ""
+        for i, p in enumerate(files):
+            ow, oh, box = crop_box(p, crops.get(p.name), s.crop_whitespace)
+            src = p
+            if box != (0, 0, ow, oh):
+                # 잘라낸 이미지는 임시 PNG로 (화질 손실 없음)
+                im = Image.open(p)
+                if im.mode != "RGB":
+                    im = im.convert("RGB")
+                src = Path(tmp) / f"{i:05d}.png"
+                im.crop(box).save(src, "PNG")
+            w, h = image_mm(box[2] - box[0], box[3] - box[1], base_w, base_h, s.fit)
+            pages_html += f"""
+            <div class="page">
+              <img src="file://{src.resolve()}" style="width:{w}mm;height:{h}mm;" />
+            </div>
+            """
 
-    pages_html = ""
-    for p in files:
-        w, h = page_for(p)
-        pages_html += f"""
-        <div class="page">
-          <img src="file://{p.resolve()}" style="width:{w}mm;height:{h}mm;" />
+        back_html = """
+        <div class="page back">
+          <p>끝</p>
         </div>
         """
 
-    cover_html = f"""
-    <div class="page cover">
-      <h1>{title or '이미지 책'}</h1>
-    </div>
-    """ if title else ""
-
-    back_html = """
-    <div class="page back">
-      <p>끝</p>
-    </div>
-    """
-
-    html = f"""<!doctype html>
+        html = f"""<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
 <style>
   @page {{ size: {base_w}mm {base_h}mm; margin: 0; }}
-  .page {{ page-break-after: always; display:flex; align-items:center; justify-content:center; }}
-  .page img {{ max-width:100%; max-height:100%; object-fit:contain; }}
-  .cover {{ background:#fff; color:#000; font-size:32px; }}
-  .back {{ background:#fff; color:#000; }}
+  body {{ margin: 0; }}
+  .page {{ position: relative; width: {base_w}mm; height: {base_h}mm; overflow: hidden; page-break-after: always; }}
+  .page img {{ position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); }}
+  .back {{ display: flex; align-items: center; justify-content: center; background:#fff; color:#000; }}
 </style>
 </head>
 <body>
-{cover_html}
 {pages_html}
 {back_html}
 </body>
 </html>
 """
-    pdf_bytes = HTML(string=html).write_pdf()
+        pdf_bytes = HTML(string=html).write_pdf()
+
     return Response(content=pdf_bytes, media_type="application/pdf", headers={
         "Content-Disposition": "attachment; filename=book.pdf"
     })

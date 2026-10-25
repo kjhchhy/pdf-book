@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#EDE8E0" />
   <title>PDF 책 만들기</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261025l" />
+  <link rel="stylesheet" href="/static/style.css?v=20261025r" />
 </head>
 <body>
 
@@ -56,9 +56,9 @@
 
     <div class="settings-body">
       <div class="field field-title">
-        <label for="title">책 제목</label>
+        <label for="title">파일 이름</label>
         <input id="title" type="text" placeholder="예: 여행 사진첩" />
-        <p class="hint">비우면 표지 없이 이미지만 담깁니다.</p>
+        <p class="hint">PDF 파일 이름으로 쓰입니다. 비우면 book.pdf</p>
       </div>
 
       <div class="field field-size">
@@ -175,12 +175,36 @@
         <span id="stageNo" class="stage-no">—</span>
       </div>
 
-      <div class="stage-frame">
-        <img id="stageImg" alt="" hidden />
-        <p id="stageEmpty" class="stage-empty">
-          페이지를 고르면<br />여기에 크게 보입니다.
-        </p>
+      <!-- PDF 한 장이 실제로 어떻게 나오는지: 흰 종이 = 페이지, 그 안에 이미지 -->
+      <div class="stage-body">
+        <div class="stage-frame" id="stageFrame">
+          <div class="sheet" id="sheet" hidden>
+            <div class="sheet-img" id="sheetImg">
+              <img id="stageImg" alt="" />
+            </div>
+            <!-- 자르기 선: 실선 안쪽만 PDF에 들어가고, 바깥(잘리는 부분)은 흐리게 -->
+            <div class="crop-mark" id="cropMark" hidden></div>
+          </div>
+          <p id="stageEmpty" class="stage-empty">
+            페이지를 고르면<br />여기에 크게 보입니다.
+          </p>
+        </div>
+
+        <!-- 페이지별 픽셀 자르기 (원본 이미지 기준) — 미리보기 오른쪽 작은 칸 -->
+        <div class="crop" id="cropBox">
+          <strong class="crop-title">자르기 px</strong>
+          <span id="cropOrig" class="crop-orig">—</span>
+          <div class="crop-fields">
+            <div class="crop-row"><span>위</span><button type="button" data-step="-1">−</button><input type="number" min="0" step="1" value="0" data-side="t" /><button type="button" data-step="1">+</button></div>
+            <div class="crop-row"><span>아래</span><button type="button" data-step="-1">−</button><input type="number" min="0" step="1" value="0" data-side="b" /><button type="button" data-step="1">+</button></div>
+            <div class="crop-row"><span>왼쪽</span><button type="button" data-step="-1">−</button><input type="number" min="0" step="1" value="0" data-side="l" /><button type="button" data-step="1">+</button></div>
+            <div class="crop-row"><span>오른쪽</span><button type="button" data-step="-1">−</button><input type="number" min="0" step="1" value="0" data-side="r" /><button type="button" data-step="1">+</button></div>
+          </div>
+          <p class="crop-tip">−/+ 한 번에 10px<br />Shift 누르면 1px</p>
+          <button id="cropReset" class="btn btn-ghost btn-sm" type="button">초기화</button>
+        </div>
       </div>
+      <p class="sheet-info" id="sheetInfo">—</p>
 
       <div class="stage-bar">
         <button id="stagePrev" class="btn btn-ghost btn-sm" type="button" title="이전 페이지">‹</button>
@@ -205,6 +229,6 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script src="/static/app.js?v=20261025l"></script>
+<script src="/static/app.js?v=20261025r"></script>
 </body>
 </html>

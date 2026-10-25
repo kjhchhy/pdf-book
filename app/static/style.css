@@ -297,15 +297,64 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   background: linear-gradient(180deg, #F4F0E9, #EFEAE2);
   border-radius: var(--r-md);
 }
-.stage-frame img {
-  position: absolute;
-  inset: 12px;
-  width: calc(100% - 24px);
-  height: calc(100% - 24px);
-  object-fit: contain;
-  filter: drop-shadow(0 8px 20px rgba(34,31,27,.18));
+/* 흰 종이 = PDF 한 페이지 (크기는 app.js가 비율대로 맞춤) */
+.sheet {
+  position: relative;
+  overflow: hidden;
+  background: #fff;
+  box-shadow: 0 8px 24px rgba(34,31,27,.2);
+  outline: 1px solid rgba(34,31,27,.12);
 }
-.stage-frame img[hidden] { display: none; }
+.sheet[hidden] { display: none; }
+.sheet-img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  overflow: hidden;
+}
+.sheet-img img { position: absolute; max-width: none; }
+.sheet-info { margin: 8px 0 0; font-size: 11.5px; color: var(--muted); text-align: center; font-variant-numeric: tabular-nums; }
+
+/* 자르기 선 — 실선 안쪽 = PDF에 들어가는 부분, 바깥은 흐리게 */
+.crop-mark {
+  position: absolute;
+  border: 2px solid #E0402A;
+  box-shadow: 0 0 0 9999px rgba(255,255,255,.55);
+  pointer-events: none;
+}
+.crop-mark[hidden] { display: none; }
+
+/* 미리보기 + 오른쪽 작은 자르기 칸 */
+.stage-body { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; align-items: start; }
+.crop { display: grid; gap: 6px; font-size: 12px; }
+.crop-title { font-size: 12.5px; }
+.crop-orig { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.crop-fields { display: grid; gap: 8px; margin: 4px 0; }
+.crop-row { display: grid; grid-template-columns: 26px minmax(0, 1fr) 26px; grid-template-areas: "lab lab lab" "m in p"; row-gap: 3px; }
+.crop-row span { grid-area: lab; font-size: 11.5px; color: var(--ink-soft); }
+.crop-row button[data-step="-1"] { grid-area: m; }
+.crop-row input { grid-area: in; }
+.crop-row button[data-step="1"] { grid-area: p; }
+.crop-row button {
+  height: 28px; border: 1px solid var(--line); background: var(--surface);
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+}
+.crop-row button[data-step="-1"] { border-radius: 8px 0 0 8px; }
+.crop-row button[data-step="1"]  { border-radius: 0 8px 8px 0; }
+.crop-row button:hover { background: var(--accent-soft); }
+.crop-row input {
+  width: 100%; height: 28px; padding: 0 4px; text-align: center;
+  border: 1px solid var(--line); border-left: 0; border-right: 0; border-radius: 0;
+  font: inherit; font-size: 13px; font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+}
+.crop-row input::-webkit-inner-spin-button, .crop-row input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.crop-tip { margin: 0; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+@media (max-width: 900px) {
+  .stage-body { grid-template-columns: 1fr; }
+  .crop-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 .stage-empty { margin: 0; text-align: center; font-size: 12px; line-height: 1.7; color: var(--muted); }
 .stage-bar { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .stage-name { flex: 1; min-width: 0; font-size: 11.5px; color: var(--ink-soft); text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -623,7 +672,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
 .grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 10px;
+  gap: 22px;   /* 사이에 끼워 넣을 자리가 잘 보이도록 넉넉히 */
   margin: 0;
   padding: 0;
   list-style: none;
@@ -645,6 +694,20 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
   transform: translateY(-2px);
 }
 .card.is-dragging { opacity: .38; cursor: grabbing; }
+/* PC에서 파일을 끌어올 때 삽입 위치 표시 */
+.card.is-insert-before::before,
+.card.is-insert-after::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--accent);
+  pointer-events: none;
+}
+.card.is-insert-before::before { top: -14px; }
+.card.is-insert-after::after  { bottom: -14px; }
 .card.is-target {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
