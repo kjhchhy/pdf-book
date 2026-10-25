@@ -1,0 +1,14 @@
+# 실행 환경 / 비밀
+.venv/
+__pycache__/
+*.pyc
+*.log
+
+# 사용자 데이터 (절대 커밋 금지)
+uploads/
+data/
+*.pdf
+_order.json
+
+# 백업 사본
+*.bak*

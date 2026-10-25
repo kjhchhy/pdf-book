@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#EDE8E0" />
+  <title>PDF 책 만들기</title>
+  <link rel="stylesheet" href="/static/style.css?v=20261025l" />
+</head>
+<body>
+
+<!-- ────────── 로그인 ────────── -->
+<section id="gate" class="gate">
+  <form id="gateForm" class="gate-card" autocomplete="off">
+    <div class="gate-spine" aria-hidden="true"><span></span><span></span><span></span></div>
+    <p class="gate-kicker">사진을 한 권의 책으로</p>
+    <h1 class="gate-title">PDF 책 만들기</h1>
+    <p class="gate-sub">비밀번호를 입력하면 시작됩니다.</p>
+    <label class="gate-field">
+      <span>비밀번호</span>
+      <input type="password" id="password" placeholder="••••••••" autofocus />
+    </label>
+    <button type="submit" class="btn btn-primary btn-block">들어가기</button>
+    <p class="gate-foot">이미지는 이 서버 안에서만 처리됩니다.</p>
+  </form>
+</section>
+
+<!-- ────────── 본문 ────────── -->
+<div id="app" class="shell" hidden>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H18a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5.5A1.5 1.5 0 0 1 4 18.5z"/>
+          <path d="M8 4v16"/><path d="M12 8.5h4M12 12h4"/>
+        </svg>
+      </span>
+      <div class="brand-text">
+        <h1>PDF 책 만들기</h1>
+        <p>이미지 번호순 정렬 · 생성 즉시 다운로드</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span id="pillCount" class="pill" hidden></span>
+      <button id="logoutBtn" class="btn btn-ghost btn-sm" title="로그아웃">나가기</button>
+    </div>
+  </header>
+
+  <!-- ────────── 책 설정 (위쪽 가로 바) ────────── -->
+  <aside class="panel settings">
+    <div class="panel-head">
+      <h2>책 설정</h2>
+      <span class="panel-hint">만들기 전에 한 번만</span>
+    </div>
+
+    <div class="settings-body">
+      <div class="field field-title">
+        <label for="title">책 제목</label>
+        <input id="title" type="text" placeholder="예: 여행 사진첩" />
+        <p class="hint">비우면 표지 없이 이미지만 담깁니다.</p>
+      </div>
+
+      <div class="field field-size">
+        <span class="label">페이지 크기</span>
+        <div class="seg" role="group" aria-label="페이지 크기">
+          <button type="button" class="seg-btn is-on" data-size="A4">A4</button>
+          <button type="button" class="seg-btn" data-size="A5">A5</button>
+          <button type="button" class="seg-btn" data-size="Letter">Letter</button>
+          <button type="button" class="seg-btn" data-size="Legal">Legal</button>
+          <button type="button" class="seg-btn" data-size="CUSTOM">사용자 지정</button>
+        </div>
+        <div class="custom-size" hidden>
+          <div class="custom-fields">
+            <label class="custom-field">
+              <span>가로</span>
+              <input id="pageW" type="number" min="1" max="1000" step="0.5" value="210" inputmode="decimal" />
+              <em>mm</em>
+            </label>
+            <span class="custom-x" aria-hidden="true">×</span>
+            <label class="custom-field">
+              <span>세로</span>
+              <input id="pageH" type="number" min="1" max="1000" step="0.5" value="297" inputmode="decimal" />
+              <em>mm</em>
+            </label>
+          </div>
+          <p class="custom-ratio" id="customRatio">가로 210 × 세로 297 mm</p>
+          <label class="custom-first">
+            <input type="checkbox" id="useFirstRatio" checked />
+            <span>세로는 첫 페이지 비율로 자동 계산</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="field field-fit">
+        <span class="label">이미지 맞춤</span>
+        <div class="seg" role="group" aria-label="이미지 맞춤">
+          <button type="button" class="seg-btn is-on" data-fit="contain">비율 유지</button>
+          <button type="button" class="seg-btn" data-fit="cover">꽉 채우기</button>
+        </div>
+      </div>
+
+      <div class="toggles toggles-inline">
+        <label class="switch-row">
+          <span class="switch-text">
+            <strong>첫 이미지 크기 기준</strong>
+            <em>모든 페이지를 첫 장 비율에 맞춥니다</em>
+          </span>
+          <input type="checkbox" id="firstPageBase" checked />
+          <span class="switch" aria-hidden="true"></span>
+        </label>
+
+        <label class="switch-row">
+          <span class="switch-text">
+            <strong>여백 자르기</strong>
+            <em>스캔한 흰 여백을 잘라냅니다</em>
+          </span>
+          <input type="checkbox" id="cropWhitespace" />
+          <span class="switch" aria-hidden="true"></span>
+        </label>
+      </div>
+
+      <div class="panel-actions settings-actions">
+        <button id="buildBtn" class="btn btn-primary js-build">
+          <span class="btn-label">PDF 만들기</span>
+          <span class="btn-spinner" aria-hidden="true"></span>
+        </button>
+        <label class="btn btn-ghost btn-sm file-label">
+          이미지 추가
+          <input type="file" id="fileInput" multiple accept="image/*" hidden />
+        </label>
+        <button id="clearBtn" class="btn btn-ghost btn-sm btn-danger-ghost">전체 삭제</button>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ────────── 이미지 추가(끌어다 놓기) ────────── -->
+  <div class="dropbar">
+    <div id="dropZone" class="drop drop-slim">
+      <div class="drop-inner">
+        <span class="drop-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 16V4"/><path d="m7 9 5-5 5 5"/>
+            <path d="M4 15v3a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-3"/>
+          </svg>
+        </span>
+        <p class="drop-title">이미지를 여기에 끌어다 놓으세요</p>
+        <p class="drop-sub">위쪽 <b>이미지 추가</b> 버튼 · JPG · PNG · WEBP</p>
+      </div>
+      <div class="drop-veil" aria-hidden="true"></div>
+    </div>
+  </div>
+
+  <main class="layout">
+
+    <!-- ────────── 페이지 목록 (세로 1줄, 고르기) ────────── -->
+    <section class="content">
+
+      <div class="list-head">
+        <h2>페이지 <span id="countText" class="count">0장</span></h2>
+      </div>
+
+      <p id="emptyState" class="empty">
+        아직 페이지가 없습니다.<br />
+        <span>이미지를 올리면 번호순으로 자동 정렬됩니다.</span>
+      </p>
+
+      <ul id="pageGrid" class="grid"></ul>
+    </section>
+
+    <!-- ────────── 우측 세로 미리보기 (고른 페이지) ────────── -->
+    <aside class="stage">
+      <div class="stage-head">
+        <h2>미리보기</h2>
+        <span id="stageNo" class="stage-no">—</span>
+      </div>
+
+      <div class="stage-frame">
+        <img id="stageImg" alt="" hidden />
+        <p id="stageEmpty" class="stage-empty">
+          페이지를 고르면<br />여기에 크게 보입니다.
+        </p>
+      </div>
+
+      <div class="stage-bar">
+        <button id="stagePrev" class="btn btn-ghost btn-sm" type="button" title="이전 페이지">‹</button>
+        <span id="stageName" class="stage-name">—</span>
+        <button id="stageNext" class="btn btn-ghost btn-sm" type="button" title="다음 페이지">›</button>
+      </div>
+    </aside>
+  </main>
+
+  <!-- 모바일 하단 고정 액션 -->
+  <div class="mobilebar">
+    <label class="btn btn-ghost file-label">
+      이미지 추가
+      <input type="file" id="fileInputM" multiple accept="image/*" hidden />
+    </label>
+    <button class="btn btn-primary js-build">
+      <span class="btn-label">PDF 만들기</span>
+      <span class="btn-spinner" aria-hidden="true"></span>
+    </button>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<script src="/static/app.js?v=20261025l"></script>
+</body>
+</html>

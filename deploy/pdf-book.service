@@ -1,0 +1,14 @@
+[Unit]
+Description=PDF Book Maker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/pdf-book
+ExecStart=/opt/pdf-book/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8092
+Restart=always
+# 실제 비밀번호는 이 파일을 서버에서 직접 만들고 chmod 600 으로 보관할 것
+Environment=PDFBOOK_PASSWORD=change-me
+
+[Install]
+WantedBy=multi-user.target
