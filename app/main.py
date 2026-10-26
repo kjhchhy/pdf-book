@@ -11,8 +11,10 @@ from weasyprint import HTML, CSS
 app = FastAPI()
 
 # 서버는 /opt/pdf-book, 로컬 테스트는 PDFBOOK_BASE 로 덮어쓴다
+# 다른 앱(anime-manager)에 붙여 쓸 때는 PDFBOOK_UPLOADS 로 업로드 폴더만 따로 지정
 BASE = Path(os.getenv("PDFBOOK_BASE", "/opt/pdf-book"))
-UPLOAD_DIR = BASE / "uploads"
+HERE = Path(__file__).resolve().parent   # main.py 옆의 static/, templates/
+UPLOAD_DIR = Path(os.getenv("PDFBOOK_UPLOADS") or BASE / "uploads")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ORDER_FILE = UPLOAD_DIR / "_order.json"
@@ -20,8 +22,8 @@ CROP_FILE = UPLOAD_DIR / "_crop.json"   # {파일명: {l,t,r,b}} 픽셀 자르�
 
 DPI = 200   # 이미지 픽셀 → mm 환산 기준
 
-app.mount("/static", StaticFiles(directory=str(BASE / "app/static")), name="static")
-templates = Jinja2Templates(directory=str(BASE / "app/templates"))
+app.mount("/static", StaticFiles(directory=str(HERE / "static")), name="static")
+templates = Jinja2Templates(directory=str(HERE / "templates"))
 
 PASSWORD = os.getenv("PDFBOOK_PASSWORD", "")
 
@@ -130,7 +132,8 @@ async def index(request: Request):
     # HTML은 절대 캐시하지 않는다 — JS/CSS 버전 쿼리만으로는
     # 오래된 HTML이 물려 있을 때 화면이 깨진다.
     return templates.TemplateResponse(
-        request, "index.html", {"request": request},
+        # base: /pdf-book 처럼 하위 경로에 붙었을 때의 접두어 (단독 실행이면 "")
+        request, "index.html", {"request": request, "base": request.scope.get("root_path", "")},
         headers={"Cache-Control": "no-store, must-revalidate"},
     )
 
@@ -145,7 +148,7 @@ async def login(request: Request):
 
 
 @app.post("/upload")
-async def upload(files: list[UploadFile] = File(...), insert_at: int = Form(-1)):
+def upload(files: list[UploadFile] = File(...), insert_at: int = Form(-1)):
     saved = []
     for f in files:
         name = Path(f.filename or "").name
@@ -177,12 +180,12 @@ async def upload(files: list[UploadFile] = File(...), insert_at: int = Form(-1))
 
 
 @app.get("/files")
-async def list_files():
+def list_files():
     return JSONResponse({"files": [p.name for p in ordered_files()]})
 
 
 @app.get("/thumb/{name}")
-async def thumb(name: str):
+def thumb(name: str):
     p = UPLOAD_DIR / Path(name).name
     if not p.exists() or p.suffix.lower() not in IMAGE_EXT:
         raise HTTPException(404, "not found")
@@ -206,7 +209,7 @@ async def thumb(name: str):
 
 
 @app.get("/view/{name}")
-async def view(name: str):
+def view(name: str):
     """좌측 미리보기용 큰 이미지 (최대 1400px)."""
     p = UPLOAD_DIR / Path(name).name
     if not p.exists() or p.suffix.lower() not in IMAGE_EXT:
@@ -231,7 +234,7 @@ async def view(name: str):
 
 
 @app.get("/preview")
-async def preview_files():
+def preview_files():
     out = []
     for p in ordered_files():
         try:
@@ -249,7 +252,7 @@ async def preview_files():
 
 
 @app.post("/reorder")
-async def reorder(order: list[str]):
+def reorder(order: list[str]):
     existing = {p.name for p in _image_files()}
     clean = [n for n in order if n in existing]
     # 누락된 파일은 뒤에 붙여 유실 방지
@@ -261,7 +264,7 @@ async def reorder(order: list[str]):
 
 
 @app.post("/sort-by-name")
-async def sort_by_name():
+def sort_by_name():
     """전체 페이지를 파일 이름순으로 다시 정렬."""
     names = sorted((p.name for p in _image_files()), key=name_key)
     _save_order(names)
@@ -269,7 +272,7 @@ async def sort_by_name():
 
 
 @app.delete("/files/{name}")
-async def delete_file(name: str):
+def delete_file(name: str):
     p = UPLOAD_DIR / Path(name).name
     if p.exists() and p.suffix.lower() in IMAGE_EXT:
         p.unlink()
@@ -281,7 +284,7 @@ async def delete_file(name: str):
 
 
 @app.post("/clear")
-async def clear_files():
+def clear_files():
     for p in _image_files():
         p.unlink()
     _save_order([])
@@ -292,7 +295,7 @@ async def clear_files():
 
 
 @app.get("/crop/{name}")
-async def get_crop(name: str):
+def get_crop(name: str):
     return JSONResponse(_load_crops().get(Path(name).name, {"l": 0, "t": 0, "r": 0, "b": 0}))
 
 
@@ -361,8 +364,95 @@ def image_mm(box_w: int, box_h: int, page_w: float, page_h: float, fit: str) -> 
     return iw * s, ih * s
 
 
+# 용량 줄이기: (페이지에 놓인 크기 기준 dpi, JPEG 품질). none 이면 원본을 그대로 넣는다
+COMPRESS = {"normal": (200, 82), "strong": (130, 68)}
+
+
+def compressed_jpeg(p: Path, box: tuple[int, int, int, int], w_mm: float, h_mm: float, level: str) -> bytes:
+    """잘라낸 이미지를 놓일 크기에 맞춰 줄이고 JPEG 로 다시 저장한 바이트."""
+    dpi, quality = COMPRESS[level]
+    tw = max(1, round(w_mm / 25.4 * dpi))
+    th = max(1, round(h_mm / 25.4 * dpi))
+    im = Image.open(p)
+    ow, oh = im.size
+    # JPEG 는 처음부터 1/2·1/4·1/8 크기로 읽을 수 있다 (풀 해상도로 풀지 않아 훨씬 빠름)
+    bw, bh = box[2] - box[0], box[3] - box[1]
+    im.draft("RGB", (max(1, ow * tw // bw), max(1, oh * th // bh)))
+    if im.size != (ow, oh):
+        sx, sy = im.width / ow, im.height / oh
+        box = (int(box[0] * sx), int(box[1] * sy), max(int(box[0] * sx) + 1, int(box[2] * sx)), max(int(box[1] * sy) + 1, int(box[3] * sy)))
+    im = im.crop(box) if box != (0, 0, *im.size) else im
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGB", im.size, (255, 255, 255))
+        bg.paste(im, mask=im.getchannel("A"))
+        im = bg
+    elif im.mode != "RGB":
+        im = im.convert("RGB")
+    if im.width > tw or im.height > th:
+        im = im.resize((tw, th), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=quality, optimize=True)
+    return buf.getvalue()
+
+
+_estimate_cache: dict[tuple, dict] = {}
+
+
+@app.get("/estimate")
+def estimate(page_size: str = "A4", custom_w: float = 0.0, custom_h: float = 0.0,
+             custom_auto: str = "true", first_page_as_base: str = "true",
+             fit: str = "contain", crop_whitespace: str = "false"):
+    """압축 단계별 예상 PDF 용량(바이트). 몇 장만 실제로 줄여 보고 전체로 늘려 계산한다."""
+    files = ordered_files()
+    if not files:
+        return JSONResponse({"count": 0, "none": 0, "normal": 0, "strong": 0})
+    crops = _load_crops()
+    key = (tuple((p.name, p.stat().st_mtime) for p in files), page_size, custom_w, custom_h, custom_auto,
+           first_page_as_base, fit, crop_whitespace, json.dumps(crops, sort_keys=True))
+    if key in _estimate_cache:
+        return JSONResponse(_estimate_cache[key])
+
+    s = Settings(page_size, custom_w, custom_h, custom_auto, first_page_as_base, fit, crop_whitespace)
+    base_w, base_h = page_mm(files, s, crops)
+
+    # 원본: 파일 크기 (직접 자른 만큼은 면적 비율로 줄여 셈)
+    def orig_bytes(p: Path) -> float:
+        size = p.stat().st_size
+        c = crops.get(p.name)
+        if c and any(c.values()):
+            ow, oh = Image.open(p).size
+            keep = max(1, ow - c.get("l", 0) - c.get("r", 0)) * max(1, oh - c.get("t", 0) - c.get("b", 0))
+            size *= min(1.0, keep / (ow * oh))
+        return size
+
+    total = sum(orig_bytes(p) for p in files)
+
+    # 표본: 고르게 최대 6장
+    n = len(files)
+    idx = sorted({round(i * (n - 1) / 5) for i in range(6)}) if n > 6 else range(n)
+    sample_orig, sample = 0.0, {lvl: 0 for lvl in COMPRESS}
+    for i in idx:
+        p = files[i]
+        _, _, box = crop_box(p, crops.get(p.name), s.crop_whitespace)
+        w, h = image_mm(box[2] - box[0], box[3] - box[1], base_w, base_h, s.fit)
+        sample_orig += orig_bytes(p)
+        for lvl in COMPRESS:
+            sample[lvl] += len(compressed_jpeg(p, box, w, h, lvl))
+
+    overhead = 2000 * (n + 1)   # 페이지마다 붙는 PDF 구조 몫 (대략)
+    out = {"count": n, "sampled": len(idx), "none": int(total + overhead)}
+    for lvl in COMPRESS:
+        out[lvl] = int(total * sample[lvl] / sample_orig + overhead) if sample_orig else 0
+        out[lvl] = min(out[lvl], out["none"])   # 원본보다 커지지는 않게 (빌드에서도 같은 규칙)
+    if len(_estimate_cache) > 20:
+        _estimate_cache.clear()
+    _estimate_cache[key] = out
+    return JSONResponse(out)
+
+
 @app.get("/layout/{name}")
-async def layout(name: str, page_size: str = "A4", custom_w: float = 0.0, custom_h: float = 0.0,
+def layout(name: str, page_size: str = "A4", custom_w: float = 0.0, custom_h: float = 0.0,
                  custom_auto: str = "true", first_page_as_base: str = "true",
                  fit: str = "contain", crop_whitespace: str = "false"):
     """미리보기용: 이 페이지가 PDF에서 어떻게 놓이는지 (mm, 원본 픽셀 기준 자르기 영역)."""
@@ -383,7 +473,7 @@ async def layout(name: str, page_size: str = "A4", custom_w: float = 0.0, custom
 
 
 @app.post("/build")
-async def build_pdf(
+def build_pdf(
     title: str = Form(""),
     page_size: str = Form("A4"),
     custom_w: float = Form(0.0),
@@ -392,10 +482,13 @@ async def build_pdf(
     first_page_as_base: str = Form("true"),
     fit: str = Form("contain"),
     crop_whitespace: str = Form("false"),
+    compress: str = Form("none"),
 ):
     files = ordered_files()
     if not files:
         raise HTTPException(400, "업로드된 이미지가 없습니다.")
+    if compress not in COMPRESS:
+        compress = "none"
 
     if page_size == "CUSTOM" and custom_w <= 0:
         raise HTTPException(400, "페이지 가로 크기를 mm 단위로 입력해주세요.")
@@ -417,6 +510,12 @@ async def build_pdf(
                 src = Path(tmp) / f"{i:05d}.png"
                 im.crop(box).save(src, "PNG")
             w, h = image_mm(box[2] - box[0], box[3] - box[1], base_w, base_h, s.fit)
+            if compress != "none":
+                # 줄인 JPEG 가 더 클 때(이미 작은 파일)는 그대로 둔다
+                jpg = compressed_jpeg(p, box, w, h, compress)
+                if len(jpg) < src.stat().st_size:
+                    src = Path(tmp) / f"{i:05d}.jpg"
+                    src.write_bytes(jpg)
             pages_html += f"""
             <div class="page">
               <img src="file://{src.resolve()}" style="width:{w}mm;height:{h}mm;" />
@@ -455,5 +554,5 @@ async def build_pdf(
 
 
 @app.get("/health")
-async def health():
+def health():
     return {"status": "ok"}

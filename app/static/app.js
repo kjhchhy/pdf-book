@@ -2,6 +2,8 @@
 
 const $  = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
+// 하위 경로에 붙어 있으면 "/pdf-book", 단독 실행이면 ""
+const BASE = document.body.dataset.base || "";
 
 const state = {
   token: localStorage.getItem("pdfbook_token") || "",
@@ -26,7 +28,7 @@ async function api(path, opts = {}) {
   const headers = { ...(opts.headers || {}) };
   if (state.token) headers.Authorization = "Bearer " + state.token;
 
-  const res = await fetch(path, { ...opts, headers });
+  const res = await fetch(BASE + path, { ...opts, headers });
   if (!res.ok) {
     let msg = "요청을 처리하지 못했습니다.";
     try {
@@ -90,6 +92,10 @@ $$(".seg").forEach((seg) => {
 
 const pageSize  = () => ($('.seg-btn[data-size].is-on')?.dataset.size) || "A4";
 const fitMode   = () => ($('.seg-btn[data-fit].is-on')?.dataset.fit) || "contain";
+const zipMode   = () => ($('.seg-btn[data-zip].is-on')?.dataset.zip) || "none";
+
+const fmtSize = (b) => b >= 1e9 ? (b / 1e9).toFixed(1) + "GB"
+  : b >= 1e6 ? (b / 1e6).toFixed(b >= 1e8 ? 0 : 1) + "MB" : Math.max(1, Math.round(b / 1e3)) + "KB";
 
 /* 사용자 지정 페이지 크기: 가로(mm) + 세로는 첫 페이지 비율로 자동 */
 const pageW = $("#pageW");
@@ -305,7 +311,7 @@ function paintStage() {
   }
 
   const idx = state.names.indexOf(name);
-  const src = "/view/" + encodeURIComponent(name);
+  const src = BASE + "/view/" + encodeURIComponent(name);
   if (stageImg.getAttribute("src") !== src) {
     stageImg.src = src;
     state.layout = null;
@@ -320,11 +326,34 @@ function paintStage() {
   loadLayout();
 }
 
+/* 압축 단계별 예상 용량 — 설정·페이지가 바뀌면 잠시 뒤 다시 계산 */
+let estSeq = 0, estTimer = null;
+const estEls = () => $$(".seg-zip small[data-est]");
+async function loadEstimate() {
+  const seq = ++estSeq;
+  if (!state.names.length) { estEls().forEach((el) => { el.textContent = "–"; }); return; }
+  estEls().forEach((el) => { el.textContent = "계산 중…"; });
+  let d;
+  try {
+    const qs = new URLSearchParams(buildSettings()).toString();
+    d = await (await api("/estimate?" + qs)).json();
+  } catch (_) { return; }
+  if (seq !== estSeq) return;
+  estEls().forEach((el) => { el.textContent = "약 " + fmtSize(d[el.dataset.est] || 0); });
+}
+function scheduleEstimate() {
+  clearTimeout(estTimer);
+  estTimer = setTimeout(loadEstimate, 500);
+}
+
 /* 설정이 바뀌면 미리보기 다시 계산 */
-$$(".seg").forEach((seg) => seg.addEventListener("click", () => setTimeout(loadLayout, 0)));
+$$(".seg").forEach((seg) => seg.addEventListener("click", (e) => {
+  setTimeout(loadLayout, 0);
+  if (!seg.classList.contains("seg-zip")) scheduleEstimate();   /* 압축 단계만 고른 건 다시 셀 필요 없음 */
+}));
 ["#pageW", "#pageH", "#useFirstRatio", "#firstPageBase", "#cropWhitespace"].forEach((sel) => {
   const el = $(sel);
-  el && el.addEventListener("change", loadLayout);
+  el && el.addEventListener("change", () => { loadLayout(); scheduleEstimate(); });
 });
 
 /* 자르기: 입력이 멈추면 저장 → 미리보기 갱신 */
@@ -337,6 +366,7 @@ async function saveCrop(values) {
     body: JSON.stringify(values),
   });
   loadLayout();
+  scheduleEstimate();
 }
 function cropValues() {
   const v = {};
@@ -472,7 +502,7 @@ function cardEl(name, index) {
     skeleton.remove();
     img.remove();
   });
-  img.src = "/thumb/" + encodeURIComponent(name);
+  img.src = BASE + "/thumb/" + encodeURIComponent(name);
 
   li.querySelector(".card-del").addEventListener("click", async (e) => {
     e.stopPropagation();
@@ -564,6 +594,7 @@ async function refresh() {
   const data = await res.json();
   state.names = data.files || [];
   render();
+  scheduleEstimate();
 }
 
 /* ───────── 전체를 파일 이름순으로 ───────── */
@@ -610,6 +641,7 @@ $$(".js-build").forEach((buildBtn) => buildBtn.addEventListener("click", async (
     const form = new FormData();
     form.append("title", $("#title").value.trim());
     Object.entries(buildSettings()).forEach(([k, v]) => form.append(k, v));
+    form.append("compress", zipMode());
 
     const res = await api("/build", { method: "POST", body: form });
     const blob = await res.blob();
@@ -623,7 +655,7 @@ $$(".js-build").forEach((buildBtn) => buildBtn.addEventListener("click", async (
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
 
-    toast(state.names.length + "장 · PDF 다운로드 시작", "is-good");
+    toast(state.names.length + "장 · " + fmtSize(blob.size) + " · PDF 다운로드 시작", "is-good");
   } catch (_) {
     toast("PDF를 만들지 못했습니다.", "is-warn");
   } finally {

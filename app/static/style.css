@@ -884,3 +884,10 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 600; letter-spacing:
     transition-duration: .001s !important;
   }
 }
+
+/* 용량 줄이기: 단계별 예상 용량 */
+.field-zip   { flex: 0 1 260px; min-width: 210px; }
+.seg-zip .seg-btn { line-height: 1.25; }
+.seg-zip .seg-btn small { display: block; font-size: 10.5px; font-weight: 500; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums; }
+.seg-zip .seg-btn.is-on small { color: var(--accent); }
+@media (max-width: 980px) { .field-zip { flex: 1 1 100%; min-width: 0; } }

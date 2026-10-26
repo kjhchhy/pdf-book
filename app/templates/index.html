@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#EDE8E0" />
   <title>PDF 책 만들기</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261025s" />
+  <link rel="stylesheet" href="{{ base }}/static/style.css?v=20261027a" />
 </head>
-<body>
+<body data-base="{{ base }}">
 
 <!-- ────────── 로그인 ────────── -->
 <section id="gate" class="gate">
@@ -98,6 +98,16 @@
           <button type="button" class="seg-btn is-on" data-fit="contain">비율 유지</button>
           <button type="button" class="seg-btn" data-fit="cover">꽉 채우기</button>
         </div>
+      </div>
+
+      <div class="field field-zip">
+        <span class="label">용량 줄이기</span>
+        <div class="seg seg-zip" role="group" aria-label="용량 줄이기">
+          <button type="button" class="seg-btn is-on" data-zip="none">원본<small data-est="none">–</small></button>
+          <button type="button" class="seg-btn" data-zip="normal">보통<small data-est="normal">–</small></button>
+          <button type="button" class="seg-btn" data-zip="strong">강하게<small data-est="strong">–</small></button>
+        </div>
+        <p class="hint">예상 용량 · 보통 200dpi, 강하게 130dpi JPEG</p>
       </div>
 
       <div class="toggles toggles-inline">
@@ -230,6 +240,6 @@
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
-<script src="/static/app.js?v=20261025s"></script>
+<script src="{{ base }}/static/app.js?v=20261027a"></script>
 </body>
 </html>
